@@ -75,7 +75,8 @@ async function findDuplicate(dest){
   }
   // Search is advisory; verify the exact destination before reuse.
   const base=originBase(config.baseUrl);let res=await apiRequest(base+API_ROOT+'?search='+encodeURIComponent(dest)+'&per_page=100','GET',config.username,config.password);
-  if(res.ok){const rows=Array.isArray(res.json)?res.json:(res.json?.data?.links||res.json?.data||[]);if(Array.isArray(rows)){const match=rows.find(r=>r.url===dest&&r.slug&&r.is_active!==0);if(match)return {id:match.id,url:dest,name:match.name,slug:match.slug,shortUrl:pickLink(match,base,match.slug),clicks:match.total_clicks||0};}}
+  if(!res.ok)throw Error('Could not search existing links: '+apiError(res)+'. No new link created.');
+  if(res.ok){const rows=Array.isArray(res.json)?res.json:(res.json?.data?.links||res.json?.data||[]);if(Array.isArray(rows)){const match=rows.find(r=>r.url===dest&&r.slug&&r.is_active!==0&&r.is_active!==false&&!r.trashed_at&&(!r.link_mode||r.link_mode==='standard'));if(match)return {id:match.id,url:dest,name:match.name,slug:match.slug,shortUrl:pickLink(match,base,match.slug),clicks:match.total_clicks||0};}}
   return null;
 }
 function showDuplicate(row){$('duplicateNotice').hidden=false;$('duplicateText').textContent='This destination already has a short link: '+row.shortUrl+' . Reuse it or create a new one?';msg('Existing link found. Choose reuse or create a new one.');}

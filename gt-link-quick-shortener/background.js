@@ -32,6 +32,33 @@ async function confirmSavedLink(row,config){
   }
   return {valid:true,row:{...row,clicks:obj.total_clicks??row.clicks}};
 }
+// Search the live GT Link Manager library, not only links made by this browser.
+// Search is a filtered request and exact URL comparison prevents partial matches.
+async function lookupServerLink(destination,config){
+  const base=config.baseUrl.replace(/\/+$/,'');
+  let page=1;
+  while(page<=20){
+    const query=new URLSearchParams({search:destination,status:'active',per_page:'200',page:String(page)});
+    const response=await fetch(base+ROOT+'?'+query.toString(),{
+      method:'GET',headers:{Authorization:auth(config.username,config.password),Accept:'application/json'},
+      credentials:'omit',redirect:'error',cache:'no-store'
+    });
+    if(!response.ok)throw Error('Cannot search existing server links (HTTP '+response.status+'). No new link created.');
+    const json=await response.json();
+    const rows=Array.isArray(json)?json:(json?.data?.links||json?.data||json?.links||[]);
+    if(!Array.isArray(rows))throw Error('Unexpected link search response. No new link created.');
+    const match=rows.find(r=>r.url===destination && r.slug && r.is_active!==0 && r.is_active!==false && !r.trashed_at && (!r.link_mode || r.link_mode==='standard'));
+    if(match){
+      const direct=[match.short_url,match.short_link,match.shortlink].find(v=>typeof v==='string'&&/^https:\/\//.test(v));
+      const shortUrl=direct||new URL(base).origin+'/'+(config.prefix?config.prefix.replace(/^\/+|\/+$/g,'')+'/':'')+encodeURIComponent(match.slug)+'/';
+      return {id:match.id,url:destination,name:match.name,slug:match.slug,shortUrl,clicks:match.total_clicks||0,createdAt:Date.now()};
+    }
+    const pages=Number(response.headers.get('X-WP-TotalPages'));
+    if(rows.length===0 || (Number.isFinite(pages)&&pages>0&&page>=pages) || rows.length<200)return null;
+    page++;
+  }
+  throw Error('Server search exceeded 20 pages; no new link created to avoid duplicates.');
+}
 async function logAction(stage,detail='',shortUrl=''){
   await chrome.storage.local.set({gtlmLastQuickAction:{stage,detail:String(detail).slice(0,500),shortUrl,at:Date.now()}});
 }
@@ -50,7 +77,21 @@ try {
     await chrome.storage.local.set({recentLinks:savedHistory});
     await logAction('stale_removed',checked.reason+'; creating a replacement');
   }
-} catch(e){await logAction('failed',e.message);await notify('GT Link Manager',e.message);return;}const slug=makeSlug(c.slugMode,url,title,c.randomLength),payload={name:(title||new URL(url).hostname).slice(0,200),url,redirect_type:Number(c.defaultRedirect||301),link_mode:'standard',is_active:1,noindex:c.defaultNoindex?1:0};if(slug)payload.slug=slug;const rel=[c.defaultNofollow?'nofollow':null,c.defaultSponsored?'sponsored':null].filter(Boolean);if(rel.length)payload.rel=rel.join(',');try{const resp=await fetch(c.baseUrl.replace(/\/+$/,'')+ROOT,{method:'POST',headers:{Authorization:auth(c.username,c.password),'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(payload),credentials:'omit',redirect:'error'});const data=await resp.json();if(!resp.ok)throw Error('HTTP '+resp.status+': '+(data.message||'Request rejected'));const obj=data.data?.link||data.link||data.data||data;const shortUrl=obj.short_url||obj.short_link||origin+'/'+(c.prefix?c.prefix.replace(/^\/+|\/+$/g,'')+'/':'')+encodeURIComponent(obj.slug||slug)+'/';if(!obj.slug&&!slug&&!obj.short_url&&!obj.short_link)throw Error('No short link returned.');await chrome.storage.local.set({recentLinks:[{id:obj.id,name:obj.name||payload.name,url,slug:obj.slug||slug,shortUrl,clicks:obj.total_clicks||0,createdAt:Date.now()},...savedHistory.filter(r=>r.shortUrl!==shortUrl)].slice(0,20)});const copied=await writeClipboard(shortUrl);await logAction(copied.ok?'created_and_copied':'created_copy_failed',copied.ok?'New link created and copied':'New link created, but clipboard failed: '+copied.reason,shortUrl);await notify(copied.ok?'Short link created and copied':'Short link created (clipboard failed)',shortUrl);}catch(e){await logAction('failed',e?.message||String(e));await notify('GT Link Manager error',e.message);}}
+} catch(e){await logAction('failed',e.message);await notify('GT Link Manager',e.message);return;}
+if(c.duplicateCheck!==false){
+  try{
+    await logAction('server_lookup','Searching WordPress for an existing destination');
+    const found=await lookupServerLink(url,c);
+    if(found){
+      await chrome.storage.local.set({recentLinks:[found,...savedHistory.filter(r=>r.shortUrl!==found.shortUrl)].slice(0,20)});
+      const copied=await writeClipboard(found.shortUrl);
+      await logAction(copied.ok?'copied_server_existing':'copy_failed',copied.ok?'Existing server link found and copied':'Existing server link found, but clipboard failed: '+copied.reason,found.shortUrl);
+      await notify(copied.ok?'Existing server link copied':'Existing server link found; clipboard failed',found.shortUrl);
+      return;
+    }
+  }catch(e){await logAction('failed',e.message);await notify('GT Link Manager',e.message);return;}
+}
+const slug=makeSlug(c.slugMode,url,title,c.randomLength),payload={name:(title||new URL(url).hostname).slice(0,200),url,redirect_type:Number(c.defaultRedirect||301),link_mode:'standard',is_active:1,noindex:c.defaultNoindex?1:0};if(slug)payload.slug=slug;const rel=[c.defaultNofollow?'nofollow':null,c.defaultSponsored?'sponsored':null].filter(Boolean);if(rel.length)payload.rel=rel.join(',');try{const resp=await fetch(c.baseUrl.replace(/\/+$/,'')+ROOT,{method:'POST',headers:{Authorization:auth(c.username,c.password),'Content-Type':'application/json',Accept:'application/json'},body:JSON.stringify(payload),credentials:'omit',redirect:'error'});const data=await resp.json();if(!resp.ok)throw Error('HTTP '+resp.status+': '+(data.message||'Request rejected'));const obj=data.data?.link||data.link||data.data||data;const shortUrl=obj.short_url||obj.short_link||origin+'/'+(c.prefix?c.prefix.replace(/^\/+|\/+$/g,'')+'/':'')+encodeURIComponent(obj.slug||slug)+'/';if(!obj.slug&&!slug&&!obj.short_url&&!obj.short_link)throw Error('No short link returned.');await chrome.storage.local.set({recentLinks:[{id:obj.id,name:obj.name||payload.name,url,slug:obj.slug||slug,shortUrl,clicks:obj.total_clicks||0,createdAt:Date.now()},...savedHistory.filter(r=>r.shortUrl!==shortUrl)].slice(0,20)});const copied=await writeClipboard(shortUrl);await logAction(copied.ok?'created_and_copied':'created_copy_failed',copied.ok?'New link created and copied':'New link created, but clipboard failed: '+copied.reason,shortUrl);await notify(copied.ok?'Short link created and copied':'Short link created (clipboard failed)',shortUrl);}catch(e){await logAction('failed',e?.message||String(e));await notify('GT Link Manager error',e.message);}}
 chrome.contextMenus.onClicked.addListener((info,tab)=>{const url=info.menuItemId==='gt-short-link'?info.linkUrl:info.pageUrl;shorten(url,info.menuItemId==='gt-short-link'?new URL(url).hostname:tab?.title);});
 chrome.commands.onCommand.addListener(async (command,tab)=>{
   if(command!=='quick-shorten')return;

@@ -7,6 +7,33 @@ const basicAuth=(username,password)=>{const bytes=new TextEncoder().encode(usern
 async function load(){const data=await chrome.storage.local.get(['gtlmSettings']);config=data.gtlmSettings||{};await render();}
 async function render(){const {recentLinks=[]}=await chrome.storage.local.get('recentLinks');const list=$('recentList');list.replaceChildren();if(!recentLinks.length){renderMessage('No recent links yet. Create one from the popup.');return;}renderMessage(recentLinks.length+' recent link'+(recentLinks.length===1?'':'s')+'.');for(const r of recentLinks){const card=document.createElement('article');card.className='recentItem';const heading=document.createElement('strong');heading.textContent=r.name||r.slug||'Short link';const url=document.createElement('div');url.className='url';url.textContent=r.shortUrl;const detail=document.createElement('div');detail.className='meta';detail.textContent=(r.url||'')+' · '+(r.clicks??0)+' clicks';const controls=document.createElement('div');controls.className='recentButtons';for(const [label,handler] of [['Copy',async()=>{await navigator.clipboard.writeText(r.shortUrl);renderMessage('Copied '+r.shortUrl);}],['Open',()=>chrome.tabs.create({url:r.shortUrl})],['Reuse / edit',()=>chrome.tabs.create({url:chrome.runtime.getURL('popup.html')+'?reuse='+encodeURIComponent(r.shortUrl)})]]){const btn=document.createElement('button');btn.className='secondary';btn.type='button';btn.textContent=label;btn.addEventListener('click',()=>Promise.resolve(handler()).catch(e=>renderMessage(e.message,true)));controls.append(btn);}card.append(heading,url,detail,controls);list.append(card);}}
 async function refreshStats(){if(!config.baseUrl||!config.username||!config.password){renderMessage('Save connection settings in the popup before refreshing statistics.',true);return;}const {recentLinks=[]}=await chrome.storage.local.get('recentLinks');$('refreshStats').disabled=true;renderMessage('Refreshing statistics…');let updated=0,failed=0;try{const base=new URL(config.baseUrl);if(base.protocol!=='https:')throw Error('An HTTPS WordPress URL is required.');for(const r of recentLinks){if(!r.id)continue;try{const res=await fetch(config.baseUrl.replace(/\/+$/,'')+root+'/'+encodeURIComponent(r.id),{method:'GET',headers:{Authorization:basicAuth(config.username,config.password),Accept:'application/json'},credentials:'omit',cache:'no-store',redirect:'error'});if(!res.ok){failed++;continue;}const json=await res.json();const row=json?.data?.link||json?.data||json;if(typeof row.total_clicks==='number'){r.clicks=row.total_clicks;updated++;}}catch{failed++;}}await chrome.storage.local.set({recentLinks});await render();renderMessage('Updated '+updated+' link'+(updated===1?'':'s')+(failed?' · '+failed+' could not be refreshed':'')+'.');}catch(e){renderMessage(e.message,true);}finally{$('refreshStats').disabled=false;}}
+async function syncServer(){
+  if(!config.baseUrl||!config.username||!config.password)return renderMessage('Save your WordPress connection settings before importing.',true);
+  $('syncServer').disabled=true;renderMessage('Importing recent active links from WordPress…');
+  try{
+    const base=config.baseUrl.replace(/\/+$/,'');
+    if(new URL(base).protocol!=='https:')throw Error('An HTTPS WordPress URL is required.');
+    const response=await fetch(base+root+'?'+new URLSearchParams({status:'active',per_page:'20',orderby:'id',order:'DESC'}),{
+      headers:{Authorization:basicAuth(config.username,config.password),Accept:'application/json'},
+      credentials:'omit',cache:'no-store',redirect:'error'
+    });
+    if(!response.ok)throw Error('WordPress link import failed (HTTP '+response.status+').');
+    const json=await response.json();
+    const rows=Array.isArray(json)?json:(json?.data?.links||json?.data||json?.links||[]);
+    if(!Array.isArray(rows))throw Error('Unexpected response from WordPress.');
+    const imported=rows.filter(r=>r.url&&r.slug&&r.is_active!==0&&r.is_active!==false&&!r.trashed_at&&(!r.link_mode||r.link_mode==='standard')).map(r=>({
+      id:r.id,name:r.name||r.slug,url:r.url,slug:r.slug,
+      shortUrl:r.short_url||r.short_link||new URL(base).origin+'/'+(config.prefix?config.prefix.replace(/^\/+|\/+$/g,'')+'/':'go/')+encodeURIComponent(r.slug)+'/',
+      clicks:r.total_clicks||0,createdAt:Date.now()
+    }));
+    const {recentLinks=[]}=await chrome.storage.local.get('recentLinks');
+    const seen=new Set();const merged=[];
+    for(const row of [...imported,...recentLinks]){if(row.shortUrl&&!seen.has(row.shortUrl)){merged.push(row);seen.add(row.shortUrl);}}
+    await chrome.storage.local.set({recentLinks:merged.slice(0,20)});
+    await render();renderMessage('Imported '+imported.length+' active link'+(imported.length===1?'':'s')+' from WordPress. Showing up to 20 recent links.');
+  }catch(e){renderMessage(e.message,true);}finally{$('syncServer').disabled=false;}
+}
+$('syncServer').addEventListener('click',syncServer);
 $('refreshStats').addEventListener('click',refreshStats);
 $('clearHistory').addEventListener('click',async()=>{if(!confirm('Clear all recent links stored in this extension? This does not delete server links.'))return;await chrome.storage.local.remove('recentLinks');await render();});
 $('openCreator').addEventListener('click',()=>chrome.tabs.create({url:chrome.runtime.getURL('popup.html')}));

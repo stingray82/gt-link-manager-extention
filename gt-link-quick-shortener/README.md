@@ -36,3 +36,11 @@ The toolbar popup shows **Last keyboard / right-click action**, including failur
 - WordPress verification failures stop the quick action rather than silently reusing an unverified link.
 - Offscreen clipboard copying uses a selected textarea with document.execCommand('copy'), plus navigator.clipboard fallback; failures are detailed under Last keyboard / right-click action.
 - Version remains 1.0.0.
+
+### Reuse links created outside this extension
+
+With duplicate detection enabled, quick shortening queries GT Link Manager for active links matching the destination URL. An exact destination match is reused and copied instead of creating another link, including links created in WordPress or other clients. The extension also verifies locally remembered links by ID to avoid reusing deleted redirects. If the API lookup fails, quick shortening stops rather than risking a duplicate.
+
+On the **Recent links** page, click **Import from WordPress** to pull the 20 newest active standard links into the local recent-links list. It does not modify or delete any server links. The history remains limited to 20 entries so it stays compact. Duplicate lookup is performed live even when a matching link is not among these 20.
+
+URL comparison is exact (including query strings and trailing slashes); GT Link Manager search is used to locate candidates, and only exact matches are reused. Make sure the configured link prefix matches the WordPress redirect prefix.
