@@ -1,5 +1,7 @@
 "use strict";
 const ROOT='/wp-json/gt-link-manager/v1/links';
+function normalizeDestination(value){try{const u=new URL(String(value||'').trim());u.hostname=u.hostname.toLowerCase();if((u.protocol==='https:'&&u.port==='443')||(u.protocol==='http:'&&u.port==='80'))u.port='';if(u.pathname!=='/')u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return String(value||'').trim();}}
+function preferExistingLink(candidate,current){if(!current)return true;const clicks=Number(candidate.total_clicks)||0,oldClicks=Number(current.total_clicks)||0;if(clicks!==oldClicks)return clicks>oldClicks;const created=Date.parse(candidate.created_at)||Infinity,oldCreated=Date.parse(current.created_at)||Infinity;if(created!==oldCreated)return created<oldCreated;return Number(candidate.id)<Number(current.id);}
 chrome.runtime.onInstalled.addListener(()=>{chrome.contextMenus.create({id:'gt-short-page',title:'Shorten page with GT Link',contexts:['page']});chrome.contextMenus.create({id:'gt-short-link',title:'Shorten link with GT Link',contexts:['link']});});
 function randomSlug(n){const chars='abcdefghijklmnopqrstuvwxyz0123456789';let result='';let bytes=new Uint8Array(Math.max(10,n));while(result.length<n){crypto.getRandomValues(bytes);for(const b of bytes){if(b<252)result+=chars[b%36];if(result.length===n)break;}}return result;}
 function makeSlug(mode,url,title,length){const clean=v=>String(v||'').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9_-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,100);if(mode==='random')return randomSlug(Math.min(20,Math.max(4,Number(length)||6)));if(mode==='blank')return '';return clean(mode==='domain'?new URL(url).hostname.replace(/^www\./,''):title||new URL(url).hostname);}
@@ -27,18 +29,18 @@ async function confirmSavedLink(row,config){
   if(result.status===404||result.status===410)return {valid:false,reason:'Server link was deleted'};
   if(!result.ok)throw Error('Cannot verify existing link (HTTP '+result.status+'). No new link created.');
   const body=await result.json();const obj=body?.data?.link||body?.data||body?.link||body;
-  if(!obj||obj.is_active===0||obj.trashed_at||obj.url!==row.url||obj.slug!==row.slug){
+  if(!obj||obj.is_active===0||obj.trashed_at||normalizeDestination(obj.url)!==normalizeDestination(row.url)||obj.slug!==row.slug){
     return {valid:false,reason:'Saved link no longer matches an active server record'};
   }
   return {valid:true,row:{...row,clicks:obj.total_clicks??row.clicks}};
 }
-// Search the live GT Link Manager library, not only links made by this browser.
-// Search is a filtered request and exact URL comparison prevents partial matches.
+// Read active link pages and compare their target_url values. The API's `search`
+// filter searches names, slugs and branded URLs, not destination URLs.
 async function lookupServerLink(destination,config){
   const base=config.baseUrl.replace(/\/+$/,'');
-  let page=1;
+  let page=1,bestMatch=null;
   while(page<=20){
-    const query=new URLSearchParams({search:destination,status:'active',per_page:'200',page:String(page)});
+    const query=new URLSearchParams({status:'active',per_page:'200',page:String(page)});
     const response=await fetch(base+ROOT+'?'+query.toString(),{
       method:'GET',headers:{Authorization:auth(config.username,config.password),Accept:'application/json'},
       credentials:'omit',redirect:'error',cache:'no-store'
@@ -47,14 +49,14 @@ async function lookupServerLink(destination,config){
     const json=await response.json();
     const rows=Array.isArray(json)?json:(json?.data?.links||json?.data||json?.links||[]);
     if(!Array.isArray(rows))throw Error('Unexpected link search response. No new link created.');
-    const match=rows.find(r=>r.url===destination && r.slug && r.is_active!==0 && r.is_active!==false && !r.trashed_at);
-    if(match){
-      const direct=[match.short_url,match.short_link,match.shortlink].find(v=>typeof v==='string'&&/^https:\/\//.test(v));
-      const shortUrl=direct||new URL(base).origin+'/'+(match.link_mode==='direct'?'':(config.prefix?config.prefix.replace(/^\/+|\/+$/g,'')+'/':''))+encodeURIComponent(match.slug)+'/';
-      return {id:match.id,url:destination,name:match.name,slug:match.slug,shortUrl,clicks:match.total_clicks||0,createdAt:Date.now()};
-    }
+    for(const row of rows){if(normalizeDestination(row.target_url||row.destination_url||row.url)!==normalizeDestination(destination)||!row.slug||row.is_active===0||row.is_active===false||row.trashed_at)continue;if(preferExistingLink(row,bestMatch))bestMatch=row;}
     const pages=Number(response.headers.get('X-WP-TotalPages'));
-    if(rows.length===0 || (Number.isFinite(pages)&&pages>0&&page>=pages) || rows.length<200)return null;
+    if(rows.length===0 || (Number.isFinite(pages)&&pages>0&&page>=pages) || rows.length<200){
+      if(!bestMatch)return null;
+      const direct=[bestMatch.short_url,bestMatch.short_link,bestMatch.shortlink].find(v=>typeof v==='string'&&/^https:\/\//.test(v));
+      const shortUrl=direct||new URL(base).origin+'/'+(bestMatch.link_mode==='direct'?'':(config.prefix?config.prefix.replace(/^\/+|\/+$/g,'')+'/':''))+encodeURIComponent(bestMatch.slug)+'/';
+      return {id:bestMatch.id,url:bestMatch.target_url||bestMatch.destination_url||destination,name:bestMatch.name,slug:bestMatch.slug,shortUrl,clicks:bestMatch.total_clicks||0,createdAt:Date.now()};
+    }
     page++;
   }
   throw Error('Server search exceeded 20 pages; no new link created to avoid duplicates.');
@@ -64,7 +66,7 @@ async function logAction(stage,detail='',shortUrl=''){
 }
 async function shorten(url,title){await logAction('started',url||'(no tab URL)');if(!/^https?:\/\//i.test(url||'')){await logAction('failed','No supported active tab URL; open an ordinary http(s) page.');await notify('GT Link Manager','Only http(s) destinations are supported.');return;}const {gtlmSettings:c={},recentLinks=[]}=await chrome.storage.local.get(['gtlmSettings','recentLinks']);if(!c.baseUrl||!c.username||!c.password){await logAction('failed','Connection settings are incomplete.');await notify('GT Link Manager','Open the popup and save your connection settings first.');return;}const origin=new URL(c.baseUrl).origin;if(!await chrome.permissions.contains({origins:[origin+'/*']})){await logAction('failed','WordPress site permission not granted. Save settings again.');await notify('GT Link Manager','Open Settings and save again to grant website access.');return;}let savedHistory=recentLinks;
 try {
-  const existing=c.duplicateCheck!==false?recentLinks.find(r=>r.url===url):null;
+  const existing=c.duplicateCheck!==false?recentLinks.find(r=>normalizeDestination(r.url)===normalizeDestination(url)):null;
   if(existing){
     const checked=await confirmSavedLink(existing,c);
     if(checked.valid){
@@ -83,7 +85,7 @@ if(c.duplicateCheck!==false){
     await logAction('server_lookup','Searching WordPress for an existing destination');
     const found=await lookupServerLink(url,c);
     if(found){
-      await chrome.storage.local.set({recentLinks:[found,...savedHistory.filter(r=>r.shortUrl!==found.shortUrl)].slice(0,20)});
+      await chrome.storage.local.set({recentLinks:[found,...savedHistory.filter(r=>r.shortUrl!==found.shortUrl&&normalizeDestination(r.url)!==normalizeDestination(found.url))].slice(0,20)});
       const copied=await writeClipboard(found.shortUrl);
       await logAction(copied.ok?'copied_server_existing':'copy_failed',copied.ok?'Existing server link found and copied':'Existing server link found, but clipboard failed: '+copied.reason,found.shortUrl);
       await notify(copied.ok?'Existing server link copied':'Existing server link found; clipboard failed',found.shortUrl);

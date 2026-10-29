@@ -10,7 +10,7 @@
 <label>Short link prefix (if customized in WordPress)<input id="prefix" type="text" placeholder="go" value="go"><span class="hint">Default GT Link Manager links use /go/slug/. This is only for displaying the created URL.</span></label>
 <div class="two"><label class="check"><input id="defaultNofollow" type="checkbox"> Nofollow</label><label class="check"><input id="defaultSponsored" type="checkbox"> Sponsored</label></div>
 <label class="check"><input id="defaultNoindex" type="checkbox"> Noindex</label>
-<label class="check"><input id="duplicateCheck" type="checkbox" checked> Check for previously shortened destination</label>
+<label class="check"><input id="duplicateCheck" type="checkbox" checked> Prevent duplicate destinations</label><span class="hint">When enabled, existing active links are reused or offered before creating another, across Standard, Direct and Regex modes. A trailing slash at the end of the destination path does not count as a different URL. Uncheck to allow duplicates.</span>
 <label class="check"><input id="quickOnPopup" type="checkbox"> Instant shorten when popup opens (disables customisation on that click)</label>
 <div class="shortcutSetting"><strong>Quick shorten keyboard shortcut</strong><p class="hint" id="shortcutStatus">Checking Chrome shortcut…</p><button id="configureShortcut" class="secondary" type="button">Configure shortcut in Chrome ↗</button><p class="hint">Chrome controls shortcuts so they do not conflict with other extensions. The shortcut is unassigned until you choose one.</p></div>
 <div class="two buttons"><button id="forgetPassword" class="secondary" type="button">Forget credentials</button><button id="clearHistory" class="secondary" type="button">Clear recent history</button></div>

@@ -7,9 +7,11 @@ let currentShortUrl = '';
 let pendingDuplicate=null;
 const API_ROOT='/wp-json/gt-link-manager/v1/links';
 const settingsKeys = Object.keys(DEFAULTS);
+function preferExistingLink(candidate,current){if(!current)return true;const clicks=Number(candidate.total_clicks)||0,oldClicks=Number(current.total_clicks)||0;if(clicks!==oldClicks)return clicks>oldClicks;const created=Date.parse(candidate.created_at)||Infinity,oldCreated=Date.parse(current.created_at)||Infinity;if(created!==oldCreated)return created<oldCreated;return Number(candidate.id)<Number(current.id);}
 const sanitizeSlug = (value) => String(value||'').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9_-]+/g,'-').replace(/^-+|-+$/g,'').slice(0,100);
 const trimUrl = (v) => String(v||'').trim().replace(/\/+$/,'');
 const validHttpUrl = (v) => {try{const u=new URL(v);return ['http:','https:'].includes(u.protocol) && Boolean(u.hostname)}catch{return false}};
+function normalizeDestination(value){try{const u=new URL(String(value||'').trim());u.hostname=u.hostname.toLowerCase();if((u.protocol==='https:'&&u.port==='443')||(u.protocol==='http:'&&u.port==='80'))u.port='';if(u.pathname!=='/')u.pathname=u.pathname.replace(/\/+$/,'');return u.href;}catch{return String(value||'').trim();}}
 const originBase = (v) => {const u=new URL(v); if(u.protocol!=='https:')throw Error('Use an HTTPS WordPress URL.'); if(u.username||u.password||u.search||u.hash)throw Error('Enter the WordPress base URL without credentials, query or fragment.');return u.origin+u.pathname.replace(/\/+$/,'')};
 const msg = (text,kind='') => { $('status').textContent=text; $('status').className='status '+kind; };
 function randomSlug(){const length=Number(config.randomLength);if(!Number.isInteger(length)||length<4||length>20)throw Error('Random slug length must be between 4 and 20.');const chars='abcdefghijklmnopqrstuvwxyz0123456789';const bytes=new Uint8Array(length);const max=256-(256%chars.length);let out='';while(out.length<length){crypto.getRandomValues(bytes);for(const b of bytes){if(b<max)out+=chars[b%chars.length];if(out.length===length)break;}}return out;}
@@ -32,7 +34,7 @@ async function apiRequest(url, method, username, password, payload){
   const response=await fetch(url,{method,headers,body:payload===undefined?undefined:JSON.stringify(payload),credentials:'omit',redirect:'error',cache:'no-store'});
   const raw=await response.text();let json;
   try{json=JSON.parse(raw)}catch{json=null;}
-  return {status:response.status,ok:response.ok,json,raw};
+  return {status:response.status,ok:response.ok,json,raw,headers:response.headers};
 }
 function apiError(result){
   const code=result.json?.code||result.json?.error||'unknown';
@@ -61,26 +63,35 @@ const payload={name,url:dest,redirect_type:Number($('redirect').value),link_mode
 $('create').disabled=true;msg('Checking and creating short link…');try{if(config.duplicateCheck && !force){const existing=await findDuplicate(dest);if(existing){pendingDuplicate={existing,payload};showDuplicate(existing);$('create').disabled=false;return;}}$('duplicateNotice').hidden=true;const endpoint=base+'/wp-json/gt-link-manager/v1/links';const response=await apiRequest(endpoint,'POST',config.username,config.password,payload);const json=response.json;if(!json)throw Error('Server returned non-JSON content (HTTP '+response.status+'). Check the site URL and REST API endpoint.');if(!response.ok){$('settings').hidden=false;throw Error(apiError(response)+'\nOpen Settings → Test connection to verify the extension credentials.')}if(json?.success===false)throw Error(json?.message||'API reported failure');const shortUrl=pickLink(json,base,slug);if(!shortUrl)throw Error('Link may have been created, but the API did not return a slug or short URL. Check GT Link Manager before retrying.');currentShortUrl=shortUrl;$('shortLink').textContent=shortUrl;$('shortLink').href=shortUrl;const record=json?.data?.link||json?.link||json?.data||json;await rememberLink({id:record.id,slug:record.slug||slug,name,url:dest,shortUrl,clicks:record.total_clicks??0,createdAt:Date.now()});$('resultMeta').textContent='Created successfully'+(record?.id?' · Link ID '+record.id:'');$('result').hidden=false;try{await navigator.clipboard.writeText(shortUrl);$('copy').textContent='Copied ✓';msg('Short link created and copied to clipboard.','ok');}catch{$('copy').textContent='Copy link';msg('Short link created. Automatic copying was blocked; click Copy link.','ok');}}catch(e){msg(e instanceof TypeError?'Could not connect. Check HTTPS, the site address, permissions, and whether the WordPress API is reachable.':e.message,'error')}finally{$('create').disabled=false;}}
 async function findDuplicate(dest){
   const {recentLinks=[]}=await chrome.storage.local.get('recentLinks');
-  const local=recentLinks.find(r=>r.url===dest);
+  const local=recentLinks.find(r=>normalizeDestination(r.url)===normalizeDestination(dest));
   if(local){
     let isLive=false;
     if(local.id){
       const check=await apiRequest(originBase(config.baseUrl)+API_ROOT+'/'+encodeURIComponent(local.id),'GET',config.username,config.password);
       if(!check.ok && ![404,410].includes(check.status))throw Error('Could not verify saved link (HTTP '+check.status+'). Try again.');
       const row=check.json?.data?.link||check.json?.data||check.json?.link||check.json;
-      isLive=check.ok && row?.url===dest && row?.slug===local.slug && row?.is_active!==0 && !row?.trashed_at;
+      isLive=check.ok && normalizeDestination(row?.target_url||row?.destination_url||row?.url)===normalizeDestination(dest) && row?.slug===local.slug && row?.is_active!==0 && !row?.trashed_at;
     }
     if(isLive)return local;
     await chrome.storage.local.set({recentLinks:recentLinks.filter(r=>r.shortUrl!==local.shortUrl)});
   }
-  // Search is advisory; verify the exact destination before reuse.
-  const base=originBase(config.baseUrl);let res=await apiRequest(base+API_ROOT+'?search='+encodeURIComponent(dest)+'&per_page=100','GET',config.username,config.password);
-  if(!res.ok)throw Error('Could not search existing links: '+apiError(res)+'. No new link created.');
-  if(res.ok){const rows=Array.isArray(res.json)?res.json:(res.json?.data?.links||res.json?.data||[]);if(Array.isArray(rows)){const match=rows.find(r=>r.url===dest&&r.slug&&r.is_active!==0&&r.is_active!==false&&!r.trashed_at);if(match)return {id:match.id,url:dest,name:match.name,slug:match.slug,shortUrl:pickLink(match,base,match.slug),clicks:match.total_clicks||0};}}
-  return null;
+  // The API's `search` filter does not search target_url, so scan active pages and compare target_url locally.
+  const base=originBase(config.baseUrl);let page=1,bestMatch=null;
+  while(page<=20){
+    const query=new URLSearchParams({status:'active',per_page:'200',page:String(page)});
+    const res=await apiRequest(base+API_ROOT+'?'+query,'GET',config.username,config.password);
+    if(!res.ok)throw Error('Could not search existing links: '+apiError(res)+'. No new link created.');
+    const rows=Array.isArray(res.json)?res.json:(res.json?.data?.links||res.json?.data||res.json?.links||[]);
+    if(!Array.isArray(rows))throw Error('Unexpected link search response. No new link created.');
+    for(const row of rows){if(normalizeDestination(row.target_url||row.destination_url||row.url)!==normalizeDestination(dest)||!row.slug||row.is_active===0||row.is_active===false||row.trashed_at)continue;if(preferExistingLink(row,bestMatch))bestMatch=row;}
+    const pages=Number(res.headers?.get?.('X-WP-TotalPages'));
+    if(rows.length===0||(Number.isFinite(pages)&&pages>0&&page>=pages)||rows.length<200)return bestMatch?{id:bestMatch.id,url:bestMatch.target_url||bestMatch.destination_url||dest,name:bestMatch.name,slug:bestMatch.slug,shortUrl:pickLink(bestMatch,base,bestMatch.slug),clicks:bestMatch.total_clicks||0}:null;
+    page++;
+  }
+  throw Error('Server search exceeded 20 pages; no new link created to avoid duplicates.');
 }
 function showDuplicate(row){$('duplicateNotice').hidden=false;$('duplicateText').textContent='This destination already has a short link: '+row.shortUrl+' . Reuse it or create a new one?';msg('Existing link found. Choose reuse or create a new one.');}
-async function rememberLink(record){const {recentLinks=[]}=await chrome.storage.local.get('recentLinks');const next=[record,...recentLinks.filter(r=>r.shortUrl!==record.shortUrl)].slice(0,20);await chrome.storage.local.set({recentLinks:next});await updateRecentSummary();}
+async function rememberLink(record){const {recentLinks=[]}=await chrome.storage.local.get('recentLinks');const destination=normalizeDestination(record.url);const next=[record,...recentLinks.filter(r=>r.shortUrl!==record.shortUrl&&normalizeDestination(r.url)!==destination)].slice(0,20);await chrome.storage.local.set({recentLinks:next});await updateRecentSummary();}
 async function updateRecentSummary(){const {recentLinks=[]}=await chrome.storage.local.get('recentLinks');$('recentSummary').textContent=recentLinks.length+' saved link'+(recentLinks.length===1?'':'s')+' · Open history to copy, reuse or refresh stats.';}
 async function applyHistoryReuse(){const key=new URLSearchParams(location.search).get('reuse');if(!key)return;const {recentLinks=[]}=await chrome.storage.local.get('recentLinks');const item=recentLinks.find(r=>r.shortUrl===key);if(!item)return;$('destination').value=item.url||'';$('linkName').value=item.name||'';$('slug').value=item.slug||'';$('settings').hidden=true;msg('Loaded a previous link. Change its slug before creating a new link.');}
 async function quickCreate(){if(!lastTab||!validHttpUrl(lastTab.url))return msg('Open a normal webpage before using Quick shorten.','error');if(!config.baseUrl||!config.username||!config.password){$('settings').hidden=false;return msg('Save connection settings first.','error');}const dest=lastTab.url;$('destination').value=dest;$('linkName').value=(lastTab.title||new URL(dest).hostname).slice(0,200);$('slug').value=slugForTab(lastTab);await createLink();}
