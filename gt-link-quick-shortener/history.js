@@ -21,7 +21,7 @@ async function syncServer(){
     const json=await response.json();
     const rows=Array.isArray(json)?json:(json?.data?.links||json?.data||json?.links||[]);
     if(!Array.isArray(rows))throw Error('Unexpected response from WordPress.');
-    const imported=rows.filter(r=>r.url&&r.slug&&r.is_active!==0&&r.is_active!==false&&!r.trashed_at&&(!r.link_mode||r.link_mode==='standard')).map(r=>({
+    const imported=rows.filter(r=>r.url&&r.slug&&r.is_active!==0&&r.is_active!==false&&!r.trashed_at&&true).map(r=>({
       id:r.id,name:r.name||r.slug,url:r.url,slug:r.slug,
       shortUrl:r.short_url||r.short_link||new URL(base).origin+'/'+(config.prefix?config.prefix.replace(/^\/+|\/+$/g,'')+'/':'go/')+encodeURIComponent(r.slug)+'/',
       clicks:r.total_clicks||0,createdAt:Date.now()

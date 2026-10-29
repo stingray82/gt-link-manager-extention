@@ -6,6 +6,7 @@ Additional quick methods: a user-assigned keyboard shortcut and right-click a pa
 
 ## Features
 - Secure random slugs by default, 6 characters, configurable 4–20
+- Default link mode (standard with prefix, direct without prefix, or regex pattern match), with a per-link override in the creation form
 - Customisable slug, redirect and metadata in popup
 - Duplicate destination check: local recent cache then exact-match API search in popup. Reuse or create a new link. Background actions reuse local history, not a full remote duplicate search.
 - 20 recent links saved locally, shown on a separate History page with copy/open/reuse and click-stat refresh

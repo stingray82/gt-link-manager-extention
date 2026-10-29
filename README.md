@@ -9,7 +9,8 @@ A Chrome extension for creating and copying short links through the [GT Link Man
 ## Features
 
 - **Quick shorten and copy:** Create a short URL from the current tab using saved defaults, then copy it to the clipboard.
-- **Custom link creation:** Edit the destination, link name, slug, redirect type and other available fields before creating a link.
+- **Custom link creation:** Choose a link mode for each link and edit its destination, name, slug, redirect type, and metadata before creating it.
+- **Link modes:** Use Standard (with your configured prefix), Direct (without the prefix), or Regex (pattern match). Set a default for quick actions and override it for an individual link.
 - **Short random slugs:** Generate compact random slugs (six characters by default); choose title-based, domain-based, manual or server-generated slugs instead.
 - **Keyboard shortcut:** Assign your own combination in Chrome's extension shortcut settings; no fixed shortcut is required.
 - **Context menu:** Right-click a page or link to shorten it.
@@ -56,8 +57,10 @@ If the Application Password section is missing, check that the site is served ov
 2. Enter your **WordPress base URL**, such as `https://short.example.com` — **not** the `/wp-json/...` API path.
 3. Enter your WordPress **username** and the **Application Password** generated above.
 4. Set your preferred short-link prefix to match your GT Link Manager configuration (for example, `/go/` or `/g/`).
-5. Select defaults for redirect type and slug generation. **Random short string** with a length of **6** is a useful starting point for social sharing.
-6. Save the settings, then use **Test Connection** to verify authentication.
+5. Choose the default link mode for quick actions. It saves automatically when changed.
+6. Choose defaults for redirect type and slug generation, then click **Save settings** to save those and your connection details. **Random short string** with a length of **6** is a useful starting point for social sharing.
+
+Standard mode uses the configured prefix, Direct mode omits it, and Regex mode uses pattern matching. The create form opens with the saved default mode; choose another mode there to override it for one link. Redirect type and link metadata can also be changed per link under **More options**, and the slug can be edited in the main form.
 
 The password field is intentionally left blank when you reopen Settings. **Blank means keep the previously saved password**; enter a new value only to replace it. Hiding the field does not encrypt the stored credential.
 
@@ -67,13 +70,13 @@ The password field is intentionally left blank when you reopen Settings. **Blank
 
 1. Browse to the page you want to share.
 2. Click the extension icon.
-3. Review or change the destination URL, link name and slug. Adjust the redirect type or other per-link options if needed.
+3. Review or change the destination URL, link name, slug, and link mode. Use **More options** to override the default redirect type and metadata for this link.
 4. Click **Create short link**.
 5. The resulting URL is automatically copied to your clipboard when Chrome permits clipboard access. A manual copy control is available as a fallback.
 
 ### Quick shorten using defaults
 
-Click **Quick shorten & copy** in the popup to create a link with the saved defaults. You can also use the keyboard shortcut or the right-click context menu. Quick actions are designed for speed; use the standard creation form whenever you want to pick a custom slug or change other fields.
+Click **Quick shorten & copy** in the popup to create a link with the saved defaults. You can also use the keyboard shortcut or the right-click context menu. Quick actions use your saved defaults, including link mode. Use the creation form whenever you want to choose a per-link mode, custom slug, redirect, or metadata.
 
 An optional **Instant shorten when popup opens** preference triggers quick creation on opening the popup. Leave this off if you often want to customise links before creating them.
 
@@ -94,15 +97,15 @@ Local history is **not** a complete inventory of links on your WordPress site. C
 
 ## Troubleshooting
 
-| Problem | What to check |
-| --- | --- |
+| Problem                                               | What to check                                                |
+| ----------------------------------------------------- | ------------------------------------------------------------ |
 | `HTTP 401` or `Sorry, you are not allowed to do that` | Verify the username and **Application Password**, then run **Test Connection**. Check the user's required WordPress capabilities and whether security software blocks REST authentication. |
-| Connection works, but creation fails | Check the detailed API error; a successful `GET` does not by itself prove `POST` link-creation permission. |
-| The shortcut does nothing | Confirm it is assigned at `chrome://extensions/shortcuts`, then check the popup's **Last keyboard / right-click action** diagnostic. Reload the extension after updates. |
-| Link created but not copied | Check Chrome clipboard permissions and the quick-action diagnostic. Use the manual **Copy** button if necessary. |
-| A short URL is wrong or returns 404 | Verify your configured short-link prefix matches GT Link Manager's prefix and confirm that the link is active on WordPress. |
-| A previously created link was deleted | Recreate the link. Local history and the live server can differ until the extension verifies the saved record. |
-| Password field looks empty | This is intentional after saving: leave it blank to retain the stored password. |
+| Connection works, but creation fails                  | Check the detailed API error; a successful `GET` does not by itself prove `POST` link-creation permission. |
+| The shortcut does nothing                             | Confirm it is assigned at `chrome://extensions/shortcuts`, then check the popup's **Last keyboard / right-click action** diagnostic. Reload the extension after updates. If Chrome reports that service worker registration failed, inspect the worker error for a JavaScript syntax error, fix it, and reload. |
+| Link created but not copied                           | Check Chrome clipboard permissions and the quick-action diagnostic. Use the manual **Copy** button if necessary. |
+| A short URL is wrong or returns 404                   | Verify your configured short-link prefix matches GT Link Manager's prefix and confirm that the link is active on WordPress. |
+| A previously created link was deleted                 | Recreate the link. Local history and the live server can differ until the extension verifies the saved record. |
+| Password field looks empty                            | This is intentional after saving: leave it blank to retain the stored password. |
 
 For an independent API check, use your credentials locally (never post them in issues):
 
@@ -120,6 +123,13 @@ See the [GT Link Manager REST API guide](https://gauravtiwari.org/gt-link-manage
 - The saved password is not re-displayed in Settings, but Chrome extension storage is **not an encrypted secrets vault**. Anyone with sufficient access to your browser profile or development tools may be able to inspect it.
 - The extension maintains a limited, local history of links. Clearing that history does not affect server-side records.
 - Review requested browser permissions before installing, especially when loading an unpacked extension.
+
+## Alpha 2 changes
+
+- Added Standard, Direct, and Regex link modes, with a saved default and a per-link override.
+- Quick shorten, keyboard shortcut, and context-menu actions use the saved link-mode default.
+- The default link mode saves automatically; other settings continue to use **Save settings**.
+- Fixed a service worker syntax error that prevented the background worker and keyboard shortcut from starting.
 
 ## Contributing
 
